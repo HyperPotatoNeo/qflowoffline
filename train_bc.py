@@ -91,7 +91,7 @@ if __name__ == '__main__':
     env = gym.make(args.env_id)
     dataset = env.get_dataset()
     #if args.predict == 'epsilon':
-    dataset['actions'] = np.arctanh(np.clip(dataset['actions'],-0.995,0.995))
+    dataset['actions'] = np.arctanh(np.clip(dataset['actions'],-0.99,0.99))
     data = D4RLDataset(dataset)
     dataloader = DataLoader(data, batch_size=args.batch_size, shuffle=True)
     

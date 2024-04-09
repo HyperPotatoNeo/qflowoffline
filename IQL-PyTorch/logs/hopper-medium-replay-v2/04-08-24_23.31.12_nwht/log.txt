@@ -1,0 +1,3 @@
+[23:31:12] Log dir: logs/hopper-medium-replay-v2/04-08-24_23.31.12_nwht
+[23:31:14] Dataset returns have range [-1.4400692265480757, 3263.440879225731]
+[23:31:44] {'return mean': 344.4255061023624, 'return std': 11.777642262910694, 'normalized return mean': 11.205706216515058, 'normalized return std': 0.36187987726733545}
