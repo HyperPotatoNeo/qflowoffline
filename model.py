@@ -7,11 +7,11 @@ import torch as T
 import copy
 
 class QFlowMLP(T.nn.Module):
-    def __init__(self, s_dim, a_dim, is_qflow=False):
+    def __init__(self, s_dim, a_dim, is_qflow=False, q_net=None):
         super(QFlowMLP, self).__init__()
         device = torch.device('cuda')
         self.is_qflow = is_qflow
-        self.q = None
+        self.q = q_net
         self.x_model = T.nn.Sequential(
             T.nn.Linear(s_dim+a_dim+128,256),nn.LayerNorm(256),T.nn.GELU(),
             T.nn.Linear(256,256),nn.LayerNorm(256),T.nn.GELU()
@@ -24,7 +24,7 @@ class QFlowMLP(T.nn.Module):
         )
 
         self.means_scaling_model = T.nn.Sequential(
-            T.nn.Linear(128,128),nn.LayerNorm(256), T.nn.GELU(),
+            T.nn.Linear(128,128),nn.LayerNorm(128), T.nn.GELU(),
             T.nn.Linear(128,128),nn.LayerNorm(128), T.nn.GELU(),
             T.nn.Linear(128,a_dim), 
         )
@@ -42,7 +42,7 @@ class QFlowMLP(T.nn.Module):
             with T.enable_grad():
                 x.requires_grad_(True)
                 means_scaling = self.means_scaling_model(t_emb) * self.q.score(s, x)
-            return self.out_model(x_emb), means_scaling
+            return self.out_model(x_emb) + means_scaling
         return self.out_model(x_emb)
     
 class DiffusionModel(nn.Module):
@@ -158,32 +158,18 @@ class ActorNetwork(nn.Module):
     
     
 class QFlow(nn.Module):
-    def __init__(self, state_dim, action_dim, diffusion_steps, schedule='linear', predict='epsilon', policy_net='mlp', q_net=None, bc_net=None, beta=1.0):
+    def __init__(self, state_dim, action_dim, diffusion_steps, schedule='linear', predict='epsilon', q_net=None, bc_net=None, alpha=1.0):
         super(QFlow, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.diffusion_steps = diffusion_steps
         self.schedule = schedule
         self.predict = predict
-        self.policy_net = policy_net
         self.q_net = q_net
         self.bc_net = bc_net
-        self.beta = beta
-        self.qflow = copy.deepcopy(policy_net)#QFlowMLP(state_dim, action_dim)
-        
-    def log_reward(self, x, a):
-        a_tanh = torch.tanh(a)
-        q_sa = self.q_net(x, a_tanh)
-        r = q_sa + torch.log((1 - (a_tanh)**2) + 1e-6).sum(1, keepdim=True)
-        return r
-
-    def score(self, x, a):
-        a = a.detach()
-        a.requires_grad_(True)
-        r = self.log_reward(x, a)
-        # get gradient wrt r_sa
-        score = torch.clamp(torch.autograd.grad(r.sum(), a)[0], -100, 100)
-        return score.detach()
+        self.alpha = alpha
+        self.qflow = QFlowMLP(state_dim, action_dim, is_qflow=True, q_net=q_net)#copy.deepcopy(bc_net.policy)#QFlowMLP(state_dim, action_dim)
+        self.qflow.is_qflow = True
     
     def forward(self, s, a, t):
         q_epsilon = self.qflow(s, a, t)
@@ -194,49 +180,42 @@ class QFlow(nn.Module):
     def sample(self, s, extra=False):
         bs = s.shape[0]
         dim = self.action_dim
-        minlogvar,maxlogvar=-4,4
         normal_dist = torch.distributions.Normal(T.zeros((bs,self.action_dim), device=s.device), T.ones((bs,self.action_dim), device=s.device))
         x = normal_dist.sample()
         t = T.zeros((bs,), device=s.device)
         dt = 1/self.diffusion_steps
 
-        logpf = normal_dist.log_prob(x).sum(1)
-        logpb = T.zeros((bs,), device=s.device)
+        logpf_pi = normal_dist.log_prob(x).sum(1)
+        logpf_p = normal_dist.log_prob(x).sum(1)
         
         extra_steps = 1
         if extra:
             extra_steps = 20
         for i in range(self.diffusion_steps):
             for j in range(extra_steps):
-                pfs, bc_epsilon = self(s, x, t)
-                #pflogvars = pfs[...,dim:].clip(min=minlogvar,max=maxlogvar)
+                q_epsilon, bc_epsilon = self(s, x, t)
                 pflogvars = np.log(torch.sqrt(self.bc_net.beta_t[i]).cpu().numpy()) * 2
-
-                add_log_var = T.full_like(pflogvars, float('-inf')) #Not needed now
-                pflogvars_sample = T.logaddexp(pflogvars, add_log_var).detach()
+                pflogvars_sample = pflogvars
                 
-                epsilon = self.beta*pfs[...,:dim] + bc_epsilon
-                new_x = self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon.detach()) + (pflogvars_sample / 2).exp() * torch.randn_like(x)
-                new_x = torch.clamp(new_x,-2.5,2.5)
+                epsilon = q_epsilon + bc_epsilon
+                new_x = self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon.detach()) + torch.sqrt(self.bc_net.beta_t[i]) * torch.randn_like(x)
 
-                pf_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon), (pflogvars / 2).exp())
-                logpf += pf_dist.log_prob(new_x).sum(1)
+                pf_pi_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * bc_epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(x))
+                logpf_pi += pf_pi_dist.log_prob(new_x).sum(1)
 
-                pb_dist = torch.distributions.Normal(torch.sqrt(1-self.bc_net.beta_t[i])*new_x, torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
-                logpb += pb_dist.log_prob(x).sum(1)
+                pf_p_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
+                logpf_p += pf_p_dist.log_prob(x).sum(1)
             
                 x = new_x
                 if i < self.diffusion_steps-1:
                     break 
             t = t + dt
             
-        return x, logpf, logpb
+        return x, logpf_pi, logpf_p
     
     def posterior_log_reward(self, s, a):
-        q_r = self.log_reward(s, a).squeeze()
-        bc_r = self.bc_net.log_prob(s, a, bs=10)
-        r = bc_r + self.beta * q_r
-        return r
+        q_r = self.q_net.log_reward(s, a).squeeze()
+        return q_r
     
     def compute_loss_with_sample(self, s, x, gfn_batch_size=64):
         s_repeat = s.repeat_interleave(gfn_batch_size, 0)
@@ -247,42 +226,41 @@ class QFlow(nn.Module):
         t = T.zeros((bs,), device=s.device)
         dt = 1/self.diffusion_steps
 
-        logpf = T.zeros((bs,), device=s.device)
-        logpb = T.zeros((bs,), device=s.device)
+        logpf_pi = T.zeros((bs,), device=s.device)
+        logpf_p = T.zeros((bs,), device=s.device)
         logr = self.posterior_log_reward(s, x)
         logr = logr.repeat_interleave(gfn_batch_size, 0)
         
         for i in range(self.diffusion_steps-1, -1, -1):
             pb_dist = torch.distributions.Normal(torch.sqrt(self.bc_net.alpha_t[i])*x_repeat, torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(x_repeat))
             new_x = pb_dist.sample()
-            logpb += pb_dist.log_prob(new_x).sum(1)
             
-            pfs, bc_epsilon = self(s_repeat, new_x, t+i*dt)
-            pflogvars = pfs[...,dim:].clip(min=minlogvar,max=maxlogvar)
-            pflogvars[:] += np.log(torch.sqrt(self.bc_net.beta_t[i]).cpu().numpy()) * 2
-            add_log_var = T.full_like(pflogvars, float('-inf')) #Not needed now
-            epsilon = self.beta*pfs[...,:dim] + bc_epsilon
+            q_epsilon, bc_epsilon = self(s_repeat, new_x, t+i*dt)
+            epsilon = q_epsilon #+ bc_epsilon
             
-            pf_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (new_x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon), (pflogvars / 2).exp())
-            logpf += pf_dist.log_prob(x_repeat).sum(1)
-            
+            pf_pi_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (new_x - self.bc_net.mab_over_sqrtmab_inv[i] * bc_epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
+            logpf_pi += pf_pi_dist.log_prob(x_repeat).sum(1)
+
+            pf_p_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (new_x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
+            logpf_p += pf_p_dist.log_prob(x_repeat).sum(1)
+
             x_repeat = new_x
         prior_dist = torch.distributions.Normal(torch.zeros_like(x_repeat), torch.ones_like(x_repeat))
-        logpf += prior_dist.log_prob(x_repeat).sum(1)
+        logpf_pi += prior_dist.log_prob(x_repeat).sum(1)
+        logpf_p += prior_dist.log_prob(x_repeat).sum(1)
         
-        logZ = -(logpf-logpb-logr).view(-1, gfn_batch_size)
-        logZ = logZ.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
+        logC = (logr+logpf_pi-logpf_p).view(-1, gfn_batch_size)
+        logC = logC.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
         
-        loss = 0.5*((logpf+logZ-logpb-logr.detach())**2).mean()
-        return loss, logZ.mean().item()
+        loss = 0.5*((logpf_p+logC-logpf_pi-logr.detach())**2).mean()
+        return loss, logC.mean().item()
     
     def compute_loss(self, s, gfn_batch_size=64):
         s_repeat = s.repeat_interleave(gfn_batch_size, 0)
-        x, logpf, logpb = self.sample(s_repeat)
+        x, logpf_pi, logpf_p = self.sample(s_repeat)
         logr = self.posterior_log_reward(s_repeat, x)
         
-        logZ = -(logpf-logpb-logr).view(-1, gfn_batch_size)
-        logZ = logZ.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
-        
-        loss = 0.5*((logpf+logZ-logpb-logr.detach())**2).mean()
-        return loss, logZ.mean().item()
+        logC = (logr+logpf_pi-logpf_p).view(-1, gfn_batch_size)
+        logC = logC.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
+        loss = 0.5*((logpf_p+logC-logpf_pi-logr.detach())**2).mean()
+        return loss, logC.mean().item()

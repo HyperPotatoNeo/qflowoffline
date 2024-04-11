@@ -19,8 +19,8 @@ class TwinQ(nn.Module):
     
     def log_reward(self, s, a_arctanh):
         a = torch.tanh(a_arctanh)
-        q_sa = self.q_net(s, a)
-        r = q_sa + torch.log((1 - (a)**2) + 1e-7).sum(1, keepdim=True)
+        q_sa = self(s, a)
+        r = q_sa + torch.log((1 - (a)**2) + 1e-7).sum(1)
         return r
 
     def score(self, s, a):
