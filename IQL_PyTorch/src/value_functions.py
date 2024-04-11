@@ -17,16 +17,16 @@ class TwinQ(nn.Module):
     def forward(self, state, action):
         return torch.min(*self.both(state, action))
     
-    def log_reward(self, s, a_arctanh):
+    def log_reward(self, s, a_arctanh, alpha=1.0):
         a = torch.tanh(a_arctanh)
         q_sa = self(s, a)
-        r = q_sa + torch.log((1 - (a)**2) + 1e-7).sum(1)
+        r = q_sa + alpha*torch.log((1 - (a)**2) + 1e-7).sum(1)
         return r
 
-    def score(self, s, a):
+    def score(self, s, a, alpha=1.0):
         a = a.detach()
         a.requires_grad_(True)
-        r = self.log_reward(s, a)
+        r = self.log_reward(s, a, alpha=alpha)
         # get gradient wrt r_sa
         score = torch.clamp(torch.autograd.grad(r.sum(), a)[0], -100, 100)
         return score.detach()

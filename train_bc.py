@@ -50,7 +50,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=float, default=512)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--schedule", type=str, default='linear')
-    parser.add_argument("--n-epochs", type=int, default=1000)
+    parser.add_argument("--n-epochs", type=int, default=10000)
     parser.add_argument("--predict", type=str, default='epsilon')
     parser.add_argument("--policy-net", type=str, default='mlp')
     parser.add_argument("--num-eval", type=int, default=5)
@@ -109,7 +109,7 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             loss_epoch += loss.item()
-            print(loss.item(), epoch)
+            #print(loss.item(), epoch)
         
         if epoch % 15 == 0:
             torch.save(model.state_dict(), "bc_models/"+filename+".pth")

@@ -1,5 +1,8 @@
 *.pth
 __pycache__/*
-wandb/*
-runs/*
+*wandb/*
+*runs/*
 *logs/*
+IQL_PyTorch/runs/*
+IQL_PyTorch/logs/*
+IQL_PyTorch/wandb/*

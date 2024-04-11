@@ -94,6 +94,7 @@ def main(args):
         iql.update(**sample_batch(dataset, args.batch_size))
         if (step+1) % args.eval_period == 0:
             avg_return = eval_policy()
+            torch.save(iql.qf.state_dict(), '../q_models/' + args.env_name + '_qf.pth')
             if args.track:
                 wandb.log({"avg_reward": avg_return})
             if avg_return > best_return:
@@ -113,7 +114,7 @@ if __name__ == '__main__':
     parser.add_argument('--discount', type=float, default=0.99)
     parser.add_argument('--hidden-dim', type=int, default=256)
     parser.add_argument('--n-hidden', type=int, default=2)
-    parser.add_argument('--n-steps', type=int, default=10**6)
+    parser.add_argument('--n-steps', type=int, default=5*(10**6))
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--learning-rate', type=float, default=3e-4)
     parser.add_argument('--alpha', type=float, default=0.005)

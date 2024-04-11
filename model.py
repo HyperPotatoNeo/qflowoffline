@@ -7,11 +7,12 @@ import torch as T
 import copy
 
 class QFlowMLP(T.nn.Module):
-    def __init__(self, s_dim, a_dim, is_qflow=False, q_net=None):
+    def __init__(self, s_dim, a_dim, is_qflow=False, q_net=None, alpha=None):
         super(QFlowMLP, self).__init__()
         device = torch.device('cuda')
         self.is_qflow = is_qflow
         self.q = q_net
+        self.alpha = alpha
         self.x_model = T.nn.Sequential(
             T.nn.Linear(s_dim+a_dim+128,256),nn.LayerNorm(256),T.nn.GELU(),
             T.nn.Linear(256,256),nn.LayerNorm(256),T.nn.GELU()
@@ -37,11 +38,14 @@ class QFlowMLP(T.nn.Module):
         t_fourier1 = (t.unsqueeze(1) * self.harmonics).sin()
         t_fourier2 = (t.unsqueeze(1) * self.harmonics).cos()
         t_emb = T.cat([t_fourier1, t_fourier2], 1)
-        x_emb = self.x_model(torch.cat([s,x,t_emb],1))
+        if not self.is_qflow:
+            x_emb = self.x_model(torch.cat([s,x,t_emb],1))
         if self.is_qflow:
+            with torch.no_grad():
+                x_emb = self.x_model(torch.cat([s,x,t_emb],1))
             with T.enable_grad():
                 x.requires_grad_(True)
-                means_scaling = self.means_scaling_model(t_emb) * self.q.score(s, x)
+                means_scaling = self.means_scaling_model(t_emb) * self.q.score(s, x, alpha=self.alpha)
             return self.out_model(x_emb) + means_scaling
         return self.out_model(x_emb)
     
@@ -168,8 +172,11 @@ class QFlow(nn.Module):
         self.q_net = q_net
         self.bc_net = bc_net
         self.alpha = alpha
-        self.qflow = QFlowMLP(state_dim, action_dim, is_qflow=True, q_net=q_net)#copy.deepcopy(bc_net.policy)#QFlowMLP(state_dim, action_dim)
+        self.qflow = copy.deepcopy(bc_net.policy)#QFlowMLP(state_dim, action_dim)#QFlowMLP(state_dim, action_dim, is_qflow=True, q_net=q_net)
         self.qflow.is_qflow = True
+        self.qflow.q = q_net
+        self.qflow.alpha = alpha
+        self.alpha = alpha
     
     def forward(self, s, a, t):
         q_epsilon = self.qflow(s, a, t)
@@ -204,7 +211,7 @@ class QFlow(nn.Module):
                 logpf_pi += pf_pi_dist.log_prob(new_x).sum(1)
 
                 pf_p_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (x - self.bc_net.mab_over_sqrtmab_inv[i] * epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
-                logpf_p += pf_p_dist.log_prob(x).sum(1)
+                logpf_p += pf_p_dist.log_prob(new_x).sum(1)
             
                 x = new_x
                 if i < self.diffusion_steps-1:
@@ -214,7 +221,7 @@ class QFlow(nn.Module):
         return x, logpf_pi, logpf_p
     
     def posterior_log_reward(self, s, a):
-        q_r = self.q_net.log_reward(s, a).squeeze()
+        q_r = self.q_net.log_reward(s, a, alpha=self.alpha).squeeze()
         return q_r
     
     def compute_loss_with_sample(self, s, x, gfn_batch_size=64):
@@ -236,7 +243,7 @@ class QFlow(nn.Module):
             new_x = pb_dist.sample()
             
             q_epsilon, bc_epsilon = self(s_repeat, new_x, t+i*dt)
-            epsilon = q_epsilon #+ bc_epsilon
+            epsilon = q_epsilon + bc_epsilon
             
             pf_pi_dist = torch.distributions.Normal(self.bc_net.oneover_sqrta[i] * (new_x - self.bc_net.mab_over_sqrtmab_inv[i] * bc_epsilon), torch.sqrt(self.bc_net.beta_t[i])*torch.ones_like(new_x))
             logpf_pi += pf_pi_dist.log_prob(x_repeat).sum(1)
@@ -249,10 +256,10 @@ class QFlow(nn.Module):
         logpf_pi += prior_dist.log_prob(x_repeat).sum(1)
         logpf_p += prior_dist.log_prob(x_repeat).sum(1)
         
-        logC = (logr+logpf_pi-logpf_p).view(-1, gfn_batch_size)
+        logC = (logr+self.alpha*logpf_pi-self.alpha*logpf_p).view(-1, gfn_batch_size)
         logC = logC.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
         
-        loss = 0.5*((logpf_p+logC-logpf_pi-logr.detach())**2).mean()
+        loss = 0.5*((self.alpha*logpf_p+logC-self.alpha*logpf_pi-logr.detach())**2).mean()
         return loss, logC.mean().item()
     
     def compute_loss(self, s, gfn_batch_size=64):
@@ -260,7 +267,7 @@ class QFlow(nn.Module):
         x, logpf_pi, logpf_p = self.sample(s_repeat)
         logr = self.posterior_log_reward(s_repeat, x)
         
-        logC = (logr+logpf_pi-logpf_p).view(-1, gfn_batch_size)
+        logC = (logr+self.alpha*logpf_pi-self.alpha*logpf_p).view(-1, gfn_batch_size)
         logC = logC.mean(1).repeat_interleave(gfn_batch_size, 0).detach()
-        loss = 0.5*((logpf_p+logC-logpf_pi-logr.detach())**2).mean()
+        loss = 0.5*((self.alpha*logpf_p+logC-self.alpha*logpf_pi-logr.detach())**2).mean()
         return loss, logC.mean().item()
