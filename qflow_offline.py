@@ -13,6 +13,16 @@ from model import DiffusionModel, QFlow
 from IQL_PyTorch.src.value_functions import TwinQ
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import stable_baselines3 as sb3
+from stable_baselines3.common.vec_env import SubprocVecEnv
+
+def make_env(env_id, seed, rank, run_name, args):
+    def thunk():
+        env = gym.make(env_id)
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env.action_space.seed(seed + rank)
+        return env
+    return thunk
 
 class D4RLDataset(Dataset):
     def __init__(self, data):
@@ -55,7 +65,7 @@ def parse_args():
     parser.add_argument("--sample-freq", type=int, default=1)
     parser.add_argument("--predict", type=str, default='epsilon')
     parser.add_argument("--policy-net", type=str, default='mlp')
-    parser.add_argument("--num-eval", type=int, default=1)
+    parser.add_argument("--num-eval", type=int, default=10)
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--extra", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
         help="Extra sampling steps")
@@ -135,20 +145,30 @@ if __name__ == '__main__':
             with torch.no_grad():
                 if ((global_step+1)%500) == 0:
                     avg_reward = 0.0
-                    for i in range(args.num_eval):
-                        s = env.reset()
-                        steps = 0
-                        done = False
-                        while not done:
-                            steps+=1
-                            s_tensor = torch.tensor(s).float().to(device).unsqueeze(0)
-                            a, _, _ = qflow.sample(s_tensor, extra=args.extra)#.detach().cpu().numpy()
-                            a = torch.tanh(torch.tensor(a)).detach().cpu().numpy()[0]
-                            s, r, done, _ = env.step(a)
-                            avg_reward += r
-                            #print(steps, s[:2])
+                    envs = SubprocVecEnv([make_env(args.env_id, 
+                                                   args.seed, 
+                                                   i,
+                                                   run_name, 
+                                                   args) for i in range(args.num_eval)])
+                    
+                    s = envs.reset()
+                    steps = 0
+                    done = [False for i in range(args.num_eval)]
+                    while False in done:
+                        steps+=1
+                        s_tensor = torch.tensor(s).float().to(device)
+                        a, _, _ = qflow.sample(s_tensor, extra=args.extra)
+                        a = torch.tanh(torch.tensor(a)).detach().cpu().numpy()
+                        s, r, terminations, infos = envs.step(a)
+
+                        for i in range(args.num_eval):
+                            if terminations[i] and not done[i]:
+                                done[i] = True 
+                                avg_reward += float(infos[i]['episode']['r'])
+                    
                     avg_reward /= args.num_eval
                     if not 'antmaze' in args.env_id:
+                        env = gym.make(args.env_id)
                         avg_reward = env.get_normalized_score(avg_reward)*100
                     print('AVG REWARD:', avg_reward)
                     writer.add_scalar("eval/avg_reward", avg_reward, global_step)

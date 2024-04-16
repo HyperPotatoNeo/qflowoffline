@@ -23,6 +23,7 @@ pip install "cython<3"
 pip install git+https://github.com/Farama-Foundation/d4rl@master#egg=d4rl
 pip3 install torch
 pip install tensorboard
+pip install stable-baselines3
 ```
 
 ### Run
