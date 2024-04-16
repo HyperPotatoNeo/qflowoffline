@@ -68,7 +68,10 @@ def main(args):
     def eval_policy():
         eval_returns = np.array([evaluate_policy(env, policy, args.max_episode_steps) \
                                  for _ in range(args.n_eval_episodes)])
-        normalized_returns = d4rl.get_normalized_score(args.env_name, eval_returns) * 100.0
+        if 'antmaze' not in args.env_name:
+            normalized_returns = d4rl.get_normalized_score(args.env_name, eval_returns) * 100.0
+        else:
+            normalized_returns = eval_returns
         log.row({
             'return mean': eval_returns.mean(),
             'return std': eval_returns.std(),

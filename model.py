@@ -41,8 +41,8 @@ class QFlowMLP(T.nn.Module):
         if not self.is_qflow:
             x_emb = self.x_model(torch.cat([s,x,t_emb],1))
         if self.is_qflow:
-            with torch.no_grad():
-                x_emb = self.x_model(torch.cat([s,x,t_emb],1))
+            #with torch.no_grad():
+            x_emb = self.x_model(torch.cat([s,x,t_emb],1))
             with T.enable_grad():
                 x.requires_grad_(True)
                 means_scaling = self.means_scaling_model(t_emb) * self.q.score(s, x, alpha=self.alpha)

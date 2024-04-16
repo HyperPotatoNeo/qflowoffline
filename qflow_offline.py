@@ -103,7 +103,7 @@ if __name__ == '__main__':
     bc_model = DiffusionModel(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], diffusion_steps=args.diffusion_steps, predict=args.predict, policy_net=args.policy_net).to(device)
     bc_model.load_state_dict(torch.load('bc_models/'+args.env_id+'_'+'train_bc.pth'))
     q = TwinQ(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
-    q.load_state_dict(torch.load('q_models/'+args.env_id+'_qf_best.pth'))
+    q.load_state_dict(torch.load('q_models/'+args.env_id+'_qf.pth'))
     
     qflow = QFlow(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], diffusion_steps=args.diffusion_steps, predict=args.predict, q_net=q, bc_net=bc_model, alpha=args.alpha).to(device)
     optimizer = torch.optim.Adam(list(qflow.qflow.out_model.parameters()) + list(qflow.qflow.means_scaling_model.parameters()) + list(qflow.qflow.x_model.parameters()), lr=args.lr)
@@ -133,22 +133,23 @@ if __name__ == '__main__':
                 writer.add_scalar("loss/logZSample", logZSample, global_step)
                 writer.add_scalar("loss/logC", logC, global_step)
             with torch.no_grad():
-                if ((global_step+1)%100) == 0:
+                if ((global_step+1)%500) == 0:
                     avg_reward = 0.0
                     for i in range(args.num_eval):
                         s = env.reset()
                         steps = 0
                         done = False
                         while not done:
-                            print(steps)
                             steps+=1
                             s_tensor = torch.tensor(s).float().to(device).unsqueeze(0)
                             a, _, _ = qflow.sample(s_tensor, extra=args.extra)#.detach().cpu().numpy()
                             a = torch.tanh(torch.tensor(a)).detach().cpu().numpy()[0]
                             s, r, done, _ = env.step(a)
                             avg_reward += r
+                            #print(steps, s[:2])
                     avg_reward /= args.num_eval
-                    avg_reward = env.get_normalized_score(avg_reward)*100
+                    if not 'antmaze' in args.env_id:
+                        avg_reward = env.get_normalized_score(avg_reward)*100
                     print('AVG REWARD:', avg_reward)
                     writer.add_scalar("eval/avg_reward", avg_reward, global_step)
             global_step += 1
