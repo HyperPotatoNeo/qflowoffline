@@ -6,3 +6,4 @@ __pycache__/*
 IQL_PyTorch/runs/*
 IQL_PyTorch/logs/*
 IQL_PyTorch/wandb/*
+*.out

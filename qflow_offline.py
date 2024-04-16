@@ -47,7 +47,7 @@ def parse_args():
 
     parser.add_argument("--env-id", type=str, default="hopper-medium-expert-v2",
         help="the id of the environment")
-    parser.add_argument("--diffusion-steps", type=int, default=100)
+    parser.add_argument("--diffusion-steps", type=int, default=75)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--schedule", type=str, default='linear')
