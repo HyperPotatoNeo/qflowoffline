@@ -117,7 +117,7 @@ if __name__ == '__main__':
     parser.add_argument('--discount', type=float, default=0.99)
     parser.add_argument('--hidden-dim', type=int, default=256)
     parser.add_argument('--n-hidden', type=int, default=2)
-    parser.add_argument('--n-steps', type=int, default=5*(10**6))
+    parser.add_argument('--n-steps', type=int, default=5*(10**7))
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--learning-rate', type=float, default=3e-4)
     parser.add_argument('--alpha', type=float, default=0.005)

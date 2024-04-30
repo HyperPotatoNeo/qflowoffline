@@ -24,6 +24,8 @@ pip install git+https://github.com/Farama-Foundation/d4rl@master#egg=d4rl
 pip3 install torch
 pip install tensorboard
 pip install stable-baselines3
+pip install 'shimmy>=0.2.1'
+pip install wandb
 ```
 
 ### Run

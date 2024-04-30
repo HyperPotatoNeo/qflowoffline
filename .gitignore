@@ -7,3 +7,4 @@ IQL_PyTorch/runs/*
 IQL_PyTorch/logs/*
 IQL_PyTorch/wandb/*
 *.out
+qflow_models/*

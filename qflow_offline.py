@@ -75,7 +75,7 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}__{args.alpha}__{args.seed}__{int(time.time())}"
     filename = args.env_id+"_"+args.exp_name
     if args.track:
         import wandb
@@ -117,9 +117,19 @@ if __name__ == '__main__':
     
     qflow = QFlow(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], diffusion_steps=args.diffusion_steps, predict=args.predict, q_net=q, bc_net=bc_model, alpha=args.alpha).to(device)
     optimizer = torch.optim.Adam(list(qflow.qflow.out_model.parameters()) + list(qflow.qflow.means_scaling_model.parameters()) + list(qflow.qflow.x_model.parameters()), lr=args.lr)
+    save_path = f'/home/mila/l/luke.rowe/qflowoffline/qflow_models/qflow_{args.env_id}_{args.alpha}_{args.seed}.pt'
+
+    if os.path.exists(save_path):
+        state = torch.load(save_path, map_location='cuda:0')
+        qflow.load_state_dict(state['state_dict'])
+        optimizer.load_state_dict(state['optimizer'])
+        global_step = state['global_step']
+        current_epoch = state['epoch'] + 1
+    else:
+        global_step = 0
+        current_epoch = 0
     
-    global_step = 0
-    for epoch in range(args.n_epochs):
+    for epoch in range(current_epoch, args.n_epochs):
         for states, actions in dataloader:
             if global_step % args.sample_freq == 0:
                 optimizer.zero_grad()
@@ -143,7 +153,7 @@ if __name__ == '__main__':
                 writer.add_scalar("loss/logZSample", logZSample, global_step)
                 writer.add_scalar("loss/logC", logC, global_step)
             with torch.no_grad():
-                if ((global_step+1)%500) == 0:
+                if ((global_step)%5000) == 0:
                     avg_reward = 0.0
                     envs = SubprocVecEnv([make_env(args.env_id, 
                                                    args.seed, 
@@ -172,4 +182,14 @@ if __name__ == '__main__':
                         avg_reward = env.get_normalized_score(avg_reward)*100
                     print('AVG REWARD:', avg_reward)
                     writer.add_scalar("eval/avg_reward", avg_reward, global_step)
+
             global_step += 1
+
+        # save model
+        state = {
+            'epoch': epoch,
+            'state_dict': qflow.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'global_step': global_step
+            }
+        torch.save(state, save_path)

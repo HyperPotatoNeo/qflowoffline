@@ -46,14 +46,14 @@ def parse_args():
 
     parser.add_argument("--env-id", type=str, default="hopper-medium-expert",
         help="the id of the environment")
-    parser.add_argument("--diffusion-steps", type=int, default=25)
+    parser.add_argument("--diffusion-steps", type=int, default=75)
     parser.add_argument("--batch-size", type=float, default=512)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--schedule", type=str, default='linear')
-    parser.add_argument("--n-epochs", type=int, default=10000)
+    parser.add_argument("--n-epochs", type=int, default=100000)
     parser.add_argument("--predict", type=str, default='epsilon')
     parser.add_argument("--policy-net", type=str, default='mlp')
-    parser.add_argument("--num-eval", type=int, default=5)
+    parser.add_argument("--num-eval", type=int, default=10)
 
     args = parser.parse_args()
     return args
