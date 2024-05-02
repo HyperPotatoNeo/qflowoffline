@@ -6,6 +6,101 @@ import torch.optim as optim
 import torch as T
 import copy
 
+class SiLU(nn.Module):
+  def __init__(self):
+    super().__init__()
+  def forward(self, x):
+    return x * torch.sigmoid(x)
+
+class GaussianFourierProjection(nn.Module):
+  """Gaussian random features for encoding time steps."""  
+  def __init__(self, embed_dim, scale=30.):
+    super().__init__()
+    # Randomly sample weights during initialization. These weights are fixed 
+    # during optimization and are not trainable.
+    self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+  def forward(self, x):
+    x_proj = x[..., None] * self.W[None, :] * 2 * np.pi
+    return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+class Dense(nn.Module):
+  """A fully connected layer that reshapes outputs to feature maps."""
+  def __init__(self, input_dim, output_dim):
+    super().__init__()
+    self.dense = nn.Linear(input_dim, output_dim)
+  def forward(self, x):
+    return self.dense(x)
+
+class Residual_Block(nn.Module):
+    def __init__(self, input_dim, output_dim, t_dim=128, last=False):
+        super().__init__()
+        self.time_mlp = nn.Sequential(
+            SiLU(),
+            nn.Linear(t_dim, output_dim),
+        )
+        self.dense1 = nn.Sequential(nn.Linear(input_dim, output_dim),SiLU())
+        self.dense2 = nn.Sequential(nn.Linear(output_dim, output_dim),SiLU())
+        self.modify_x = nn.Linear(input_dim, output_dim) if input_dim != output_dim else nn.Identity()
+    def forward(self, x, t):
+        h1 = self.dense1(x) + self.time_mlp(t)
+        h2 = self.dense2(h1)
+        return h2 + self.modify_x(x)
+
+class QGPOPolicy(nn.Module):
+    def __init__(self, s_dim, a_dim, is_qflow=False, q_net=None, alpha=None):
+        super(QGPOPolicy, self).__init__()
+        embed_dim=32
+        self.is_qflow = is_qflow
+        self.alpha = alpha
+        self.q = q_net
+
+        # The swish activation function
+        self.embed = nn.Sequential(GaussianFourierProjection(embed_dim=embed_dim),
+                                   nn.Linear(embed_dim, embed_dim))
+        self.act = lambda x: x * torch.sigmoid(x)
+        self.pre_sort_condition = nn.Sequential(Dense(s_dim, 32), SiLU())
+        self.sort_t = nn.Sequential(
+                        nn.Linear(64, 128),                        
+                        SiLU(),
+                        nn.Linear(128, 128),
+                    )
+        self.down_block1 = Residual_Block(a_dim, 512)
+        self.down_block2 = Residual_Block(512, 256)
+        self.down_block3 = Residual_Block(256, 128)
+        self.middle1 = Residual_Block(128, 128)
+        self.up_block3 = Residual_Block(256, 256)
+        self.up_block2 = Residual_Block(512, 512)
+        self.last = nn.Linear(1024, a_dim)
+
+        if self.is_qflow:
+            self.means_scaling_model = T.nn.Sequential(
+            T.nn.Linear(128,128),nn.LayerNorm(128), T.nn.GELU(),
+            T.nn.Linear(128,128),nn.LayerNorm(128), T.nn.GELU(),
+            T.nn.Linear(128,a_dim), 
+        )
+        
+    
+    def forward(self, s, x, t):
+        embed = self.embed(t)
+        embed = torch.cat([self.pre_sort_condition(s), embed], dim=-1)
+        embed = self.sort_t(embed)
+        d1 = self.down_block1(x, embed)
+        d2 = self.down_block2(d1, embed)
+        d3 = self.down_block3(d2, embed)
+        u3 = self.middle1(d3, embed)
+        u2 = self.up_block3(torch.cat([d3, u3], dim=-1), embed)
+        u1 = self.up_block2(torch.cat([d2, u2], dim=-1), embed)
+        u0 = torch.cat([d1, u1], dim=-1)
+        h = self.last(u0)
+        
+        if self.is_qflow:
+            with T.enable_grad():
+                x.requires_grad_(True)
+                means_scaling = self.means_scaling_model(embed) * self.q.score(s, x, alpha=self.alpha)
+                h = h + means_scaling
+
+        return h
+
 class QFlowMLP(T.nn.Module):
     def __init__(self, s_dim, a_dim, is_qflow=False, q_net=None, alpha=None):
         super(QFlowMLP, self).__init__()
@@ -56,7 +151,7 @@ class DiffusionModel(nn.Module):
         self.action_dim = action_dim
         self.diffusion_steps = diffusion_steps
         self.schedule = schedule
-        self.policy = QFlowMLP(s_dim=state_dim, a_dim=action_dim)
+        self.policy = QGPOPolicy(s_dim=state_dim, a_dim=action_dim)
         self.diffusion_steps = diffusion_steps
         self.predict = predict
         if self.schedule == 'linear':
@@ -172,10 +267,18 @@ class QFlow(nn.Module):
         self.q_net = q_net
         self.bc_net = bc_net
         self.alpha = alpha
-        self.qflow = copy.deepcopy(bc_net.policy)#QFlowMLP(state_dim, action_dim)#QFlowMLP(state_dim, action_dim, is_qflow=True, q_net=q_net)
-        self.qflow.is_qflow = True
-        self.qflow.q = q_net
-        self.qflow.alpha = alpha
+        self.qflow = QGPOPolicy(s_dim=state_dim, a_dim=action_dim, is_qflow=True, q_net=q_net, alpha=alpha)
+        # copy over parameters
+        self.qflow.embed = copy.deepcopy(bc_net.policy.embed)
+        self.qflow.pre_sort_condition = copy.deepcopy(bc_net.policy.pre_sort_condition)
+        self.qflow.sort_t = copy.deepcopy(bc_net.policy.sort_t)
+        self.qflow.down_block1 = copy.deepcopy(bc_net.policy.down_block1)
+        self.qflow.down_block2 = copy.deepcopy(bc_net.policy.down_block2)
+        self.qflow.down_block3 = copy.deepcopy(bc_net.policy.down_block3)
+        self.qflow.middle1 = copy.deepcopy(bc_net.policy.middle1)
+        self.qflow.up_block3 = copy.deepcopy(bc_net.policy.up_block3)
+        self.qflow.up_block2 = copy.deepcopy(bc_net.policy.up_block2)
+        self.qflow.last = copy.deepcopy(bc_net.policy.last)
         self.alpha = alpha
     
     def forward(self, s, a, t):

@@ -111,13 +111,23 @@ if __name__ == '__main__':
     dataloader = DataLoader(data, batch_size=args.batch_size, shuffle=True)
     
     bc_model = DiffusionModel(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], diffusion_steps=args.diffusion_steps, predict=args.predict, policy_net=args.policy_net).to(device)
-    bc_model.load_state_dict(torch.load('bc_models/'+args.env_id+'_'+'train_bc.pth'))
+    bc_model.load_state_dict(torch.load('bc_models/'+args.env_id+'_'+'train_bc_dgpo.pth'))
     q = TwinQ(env.observation_space.shape[0], env.action_space.shape[0]).to(device)
     q.load_state_dict(torch.load('q_models/'+args.env_id+'_qf.pth'))
     
     qflow = QFlow(state_dim=env.observation_space.shape[0], action_dim=env.action_space.shape[0], diffusion_steps=args.diffusion_steps, predict=args.predict, q_net=q, bc_net=bc_model, alpha=args.alpha).to(device)
-    optimizer = torch.optim.Adam(list(qflow.qflow.out_model.parameters()) + list(qflow.qflow.means_scaling_model.parameters()) + list(qflow.qflow.x_model.parameters()), lr=args.lr)
-    save_path = f'/home/mila/l/luke.rowe/qflowoffline/qflow_models/qflow_{args.env_id}_{args.alpha}_{args.seed}.pt'
+    optimizer = torch.optim.Adam(list(qflow.qflow.embed.parameters()) +  
+                                 list(qflow.qflow.means_scaling_model.parameters()) +  
+                                 list(qflow.qflow.pre_sort_condition.parameters()) + 
+                                 list(qflow.qflow.sort_t.parameters()) + 
+                                 list(qflow.qflow.down_block1.parameters()) + 
+                                 list(qflow.qflow.down_block2.parameters()) + 
+                                 list(qflow.qflow.down_block3.parameters()) + 
+                                 list(qflow.qflow.middle1.parameters()) + 
+                                 list(qflow.qflow.up_block3.parameters()) + 
+                                 list(qflow.qflow.up_block2.parameters()) + 
+                                 list(qflow.qflow.last.parameters()), lr=args.lr)
+    save_path = f'/home/mila/l/luke.rowe/qflowoffline/qflow_models/qflow_{args.env_id}_{args.alpha}_{args.seed}_dgpo.pt'
 
     if os.path.exists(save_path):
         state = torch.load(save_path, map_location='cuda:0')

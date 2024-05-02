@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#SBATCH --partition=long
+#SBATCH --partition=unkillable
 #SBATCH -c 6                                                           
 #SBATCH --mem=32G                                        
-#SBATCH --time=96:00:00    
-#SBATCH --gres=gpu:rtx8000:1                           
+#SBATCH --time=48:00:00    
+#SBATCH --gres=gpu:a100l:1                           
 #SBATCH -o /home/mila/l/luke.rowe/qflowoffline/slurm_logs/qflow_hopper_medium_v2_alpha0.01_seed4.out
 module --quiet load miniconda/3
 conda activate qflow_new

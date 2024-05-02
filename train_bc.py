@@ -112,7 +112,7 @@ if __name__ == '__main__':
             #print(loss.item(), epoch)
         
         if epoch % 15 == 0:
-            torch.save(model.state_dict(), "bc_models/"+filename+".pth")
+            torch.save(model.state_dict(), "bc_models/"+filename+"_dgpo.pth")
         with torch.no_grad():
             if epoch % 15 == 0:
                 avg_reward = 0.0
@@ -130,6 +130,6 @@ if __name__ == '__main__':
                 wandb.log({"loss": loss_epoch/len(dataloader), "avg_reward": avg_reward})
                 if avg_reward > best_eval:
                     best_eval = avg_reward
-                    torch.save(model.state_dict(), "bc_models/"+filename+"_best.pth")
+                    torch.save(model.state_dict(), "bc_models/"+filename+"_dgpo_best.pth")
             else:
                 wandb.log({"loss": loss_epoch/len(dataloader)})
