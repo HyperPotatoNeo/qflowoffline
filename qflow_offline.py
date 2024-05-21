@@ -75,7 +75,7 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
-    run_name = f"{args.env_id}__{args.exp_name}__{args.alpha}__{args.seed}__{int(time.time())}"
+    run_name = f"{args.env_id}__{args.exp_name}__{args.alpha}__{args.seed}__{args.lr}__gradclip__{int(time.time())}"
     filename = args.env_id+"_"+args.exp_name
     if args.track:
         import wandb
@@ -127,7 +127,7 @@ if __name__ == '__main__':
                                  list(qflow.qflow.up_block3.parameters()) + 
                                  list(qflow.qflow.up_block2.parameters()) + 
                                  list(qflow.qflow.last.parameters()), lr=args.lr)
-    save_path = f'/home/mila/l/luke.rowe/qflowoffline/qflow_models/qflow_{args.env_id}_{args.alpha}_{args.seed}_dgpo.pt'
+    save_path = f'/home/mila/l/luke.rowe/qflowoffline/qflow_models/qflow_{args.env_id}_{args.alpha}_{args.seed}_{args.lr}_gradclip_dgpo.pt'
 
     if os.path.exists(save_path):
         state = torch.load(save_path, map_location='cuda:0')
@@ -146,6 +146,7 @@ if __name__ == '__main__':
                 states = states.to(device)
                 loss, logZSample = qflow.compute_loss(states)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(qflow.parameters(), 5)
                 optimizer.step()
                 sample_loss = loss.item()
 
